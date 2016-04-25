@@ -1,1 +1,1 @@
-./reliable_sender 127.0.0.1 9000 test.txt
+./reliable_sender 127.0.0.1 9000 test_small.txt 16
