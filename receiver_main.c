@@ -2,182 +2,203 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <netdb.h>
+#include <sys/time.h>
+#include <string.h>
+#include <pthread.h>
+#include <assert.h>
+#include "packet_header.h"
 
-#define MAXBUFLEN 1400
+int  sequencenumber;
+int  buf_len;
+off_t offst = 0;
 
-typedef struct {    // 16 bytes
- 	uint16_t src_port;  /* source port */
- 	uint16_t dest_port;  /* destination port */
- 	uint32_t seq_no;   /* sequence number */
- 	uint32_t ack_no;   /* acknowledgement number */
- 	uint8_t SYN;	/*for syncronization*/
- 	uint8_t ACK;	/*for acknowledgement*/
-	uint8_t FIN;	/*for closing the connection*/
-	uint8_t DATA;	/*Data bit*/
-}TCP_hearder;
+unsigned int lossCtr = 0;
 
-enum tcp_state {
-	CLOSED      = 0,
-	LISTEN      = 1,
-	SYN_SENT    = 2,
-	SYN_RCVD    = 3,
-	ESTABLISHED = 4,
-	FIN_WAIT_1  = 5,
-	FIN_WAIT_2  = 6,
-	CLOSE_WAIT  = 7,
-	CLOSING     = 8,
-	LAST_ACK    = 9,
-	TIME_WAIT   = 10
+enum state {
+	GOOD_STATE = 1,
+	LOSSY_STATE = 2
 };
 
-void print_header(TCP_hearder * header)
+struct sockaddr_in si_me, si_other;
+int recv_sockfd;
+struct sockaddr_in peer_addr;
+socklen_t peer_addr_len = sizeof(struct sockaddr_in);
+unsigned short int port_num;
+packet_t *recv_packet;
+
+enum state getState(int sequencenum, off_t off)
 {
-	printf( "src_port = %d \n", ntohs(header->src_port));
-	printf( "dest_port = %d \n", ntohs(header->dest_port));
-	printf( "seq_no = %d \n", ntohl(header->seq_no));
-	printf( "ack_no = %d \n", ntohl(header->ack_no));
-	printf( "SYN = %d \n", header->SYN);
-	printf( "ACK = %d \n", header->ACK);
-	printf( "FIN = %d \n", header->FIN);
-	printf( "DATA = %d \n", header->DATA);
+	if ((sequencenum == (sequencenumber + 1)) && (off == offst)) {
+		return GOOD_STATE;
+	} else {
+		return LOSSY_STATE;
+	}
 }
 
-int set_timeout(int sockfd, int ms)
+int setup_network(unsigned short int UDPport)
 {
-	struct timeval tv;
-	tv.tv_sec = 1;
-	tv.tv_usec = ms * 000;  //100ms
-	if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-		perror("sender: setsockopt");
-		return -1;
+
+	if ((recv_sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP))==-1)
+	{
+		perror("Socket call failed\n");
+		exit(1);
 	}
+
+	memset((char *) &si_me, 0, sizeof(si_me));
+	si_me.sin_family = AF_INET;
+	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+	si_me.sin_port = htons(UDPport);
+	if (bind(recv_sockfd, (struct sockaddr*)&si_me, sizeof(si_me)) == -1) {
+		perror("Bind Error");
+		exit(1);
+	}
+	port_num = UDPport;
+
 	return 0;
 }
 
-int reliablyReceive(char * udpPort, char* destinationFile) {
-	int sockfd;
-	struct addrinfo hints, *servinfo, *p;
-	int rv;
-	int numbytes;
-	struct sockaddr their_addr;
-	char buf[MAXBUFLEN];
-	socklen_t their_addr_len = sizeof(their_addr);
-	char s[INET_ADDRSTRLEN];
+void*
+producer(void* arg)
+{
+	char* destfile = (char *)arg;
+	ack_t  ack_now;
+	int num;
+	FILE*  dest;
+	int recvbytes;
+	long writebytes = 0;
+	long totalRecv = 0;
+	int state = 0;
+	int prev_state = 0;
 
-	memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET; // set to AF_INET to force IPv4
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
+	recv_packet = malloc(sizeof(packet_t)+MSS);
 
-    if ((rv = getaddrinfo(NULL, udpPort, &hints, &servinfo)) != 0) {
-    	fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-    	return 1;
-    }
+	dest = fopen(destfile, "wb");
+	if (dest == NULL) {
+		perror("Fopen failed\n");
+		exit(1);
+	}
 
-    // loop through all the results and bind to the first we can
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-    	if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-    		perror("receiver: socket");
-    		continue;
-    	}
-
-    	if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-    		close(sockfd);
-    		perror("receiver: bind");
-    		continue;
-    	}
-
-    	break;
-    }
-
-    if (p == NULL) {
-    	fprintf(stderr, "receiver: failed to bind socket\n");
-    	return 2;
-    }
-    freeaddrinfo(servinfo);
-
-    enum tcp_state state;
-    state = LISTEN;
-    printf("receiver: waiting to recvfrom...\n");
-
-    TCP_hearder my_header, their_header;
-    my_header.src_port = htons( (uint16_t)atoi(udpPort) );
-    my_header.seq_no = htonl(0);
-    my_header.ack_no = htonl(0);
-    my_header.SYN = 1;
-    my_header.ACK = 1;
-    my_header.FIN = 0;
-    my_header.DATA = 0;
-
-    numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0, (struct sockaddr *)&their_addr, 
-    	&their_addr_len);
-    buf[numbytes] = '\0';
-    
-    memcpy(&their_header, buf, numbytes);
-    my_header.dest_port = their_header.src_port;
-    if (their_header.SYN == 1 && their_header.DATA == 0)
-    	state = SYN_RCVD;
-
-	set_timeout(sockfd, 100); //100ms
-
+	offst = 0;
 	while(1)
 	{
-		memcpy(buf, &my_header, sizeof(my_header));
-		if ((numbytes = sendto(sockfd, buf, 16, 0, (struct sockaddr *)&their_addr, 
-			their_addr_len)) == -1) 
+		if((recvbytes = recvfrom(recv_sockfd, recv_packet, sizeof(packet_t)+MSS, MSG_WAITALL,
+								 (struct sockaddr *)&peer_addr, &peer_addr_len)) == -1)
 		{
-			perror("receiver: sendto");
-			exit(2);
+			perror("Packet recieve error");
+			exit(1);
 		}
-		state = SYN_SENT;
-		numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0, NULL, NULL);
-		
-		if (numbytes == 16)
+
+		totalRecv += recvbytes;
+		if (recv_packet->packet_type == EOF_PKT) {
+			eof_packet_t *ep = malloc(sizeof(eof_packet_t));;
+			memcpy(ep, &recv_packet, sizeof(eof_packet_t));
+			printf("Total bytes written %ld File size %d EOF %d Final Local State %d Loss Ctr %d\n",
+				   writebytes, ntohl(ep->file_sz), ntohl(ep->eof), state, lossCtr);
+			fflush(dest);
+			fclose(dest);
+			free(ep);
 			break;
-	}
-	
-	buf[numbytes] = '\0';
-	memcpy(&their_header, buf, numbytes);
-	state = ESTABLISHED;
-	printf("Connection Established\n");
-	print_header(&their_header);
+		}
 
-	while(1)
-	{
-		numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0, NULL, NULL);
+		switch(getState(ntohl(recv_packet->sequencenumber), ntohl(recv_packet->f_offset))) {
+			case GOOD_STATE:
+			{
+				sequencenumber++;
+				buf_len = ntohl(recv_packet->buf_bytes);
+				if((num = fwrite(recv_packet->data, 1, buf_len, dest)) == -1) {
+					perror("fwrite");
+					exit(1);
 
-		if(numbytes > 15)
-		{
-			buf[numbytes] = '\0';
-			memcpy(&their_header, buf, sizeof(their_header));
-			if (their_header.DATA == 1)
+				}
+				offst = ftell(dest);
+
+				writebytes += num;
+				ack_now.buf_len = recv_packet->buf_bytes;
+				ack_now.sequencenumber = htonl(sequencenumber);
+				ack_now.tot_bytes = htonl(writebytes);
+				ack_now.f_offset = htonl(ftell(dest));
+				if (peer_addr.sin_port != htons(port_num)) {
+					peer_addr.sin_port = htons(port_num);
+				}
+				if((num = sendto(recv_sockfd, &ack_now, sizeof(ack_t), MSG_WAITALL,
+								 (struct sockaddr *)&peer_addr, peer_addr_len)) == -1)
+				{
+					printf("Peer Addr %s Peer port %d Peer AF %d\n",
+						   inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port),
+						   ntohs(peer_addr.sin_family));
+					perror("Send ack error 1");
+					exit(1);
+				}
+			}
+				state = GOOD_STATE;
+				prev_state = GOOD_STATE;
 				break;
-		}	
+			case LOSSY_STATE:
+			{
+				if (prev_state == GOOD_STATE) {
+					lossCtr++;
+				}
+
+				ack_now.buf_len = htonl(buf_len);
+				ack_now.tot_bytes = htonl(writebytes);
+				ack_now.sequencenumber = htonl(sequencenumber);
+				ack_now.f_offset = htonl(ftell(dest));
+
+				if((num = sendto(recv_sockfd, &ack_now, sizeof(ack_t), 0,
+								 (struct sockaddr *)&peer_addr, peer_addr_len)) == -1)
+				{
+					perror("Send ack error 1");
+					exit(1);
+				}
+				state = LOSSY_STATE;
+				prev_state = LOSSY_STATE;
+			}
+				break;
+		}
 	}
-	printf("bytes received %d\n", (int)(numbytes - sizeof(their_header)));
-
-	FILE *recv_file = fopen(destinationFile, "wb");
-	fwrite(buf+ sizeof(their_header), 1, numbytes - sizeof(their_header), recv_file);
-
-	fclose(recv_file);
-
-
-
-	close(sockfd);
-
-
-
+	printf("Producer done and exiting\n");
+	return NULL;
 }
+
+void
+reliablyReceive(unsigned short int myUDPport, char* destinationFile)
+{
+	pthread_t produceid;
+
+	char* file = malloc(strlen(destinationFile) + 1);
+
+	memset(file, 0, strlen(destinationFile)+1);
+	memcpy(file, destinationFile, strlen(destinationFile));
+
+	if (pthread_create(&produceid, NULL, &producer, file) < 0) {
+		printf("PThread create error\n");
+		perror("");
+	}
+
+	pthread_join(produceid, NULL);
+
+	return;
+}
+
+void
+init(unsigned short int udpPort)
+{
+	int i;
+
+	setup_network(udpPort);
+	sequencenumber = 0;
+}
+
+
 
 int main(int argc, char** argv)
 {
+	unsigned short int udpPort;
 
 
 	if(argc != 3)
@@ -185,8 +206,12 @@ int main(int argc, char** argv)
 		fprintf(stderr, "usage: %s UDP_port filename_to_write\n\n", argv[0]);
 		exit(1);
 	}
-	
 
 
-	reliablyReceive(argv[1], argv[2]);
+
+	udpPort = (unsigned short int)atoi(argv[1]);
+	init(udpPort);
+	reliablyReceive(udpPort, argv[2]);
+
+	return 0;
 }
