@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <time.h>
 #include "packet_header.h"
 
 #define  NUM_STATES   3
@@ -20,6 +21,8 @@
 #define  CONG_AVOID   2
 #define  EVENTS       5
 #define	 INVALID_EVT  5
+
+time_t start, diff;
 
 int sequencenumber;
 int recv_sockfd;
@@ -214,8 +217,8 @@ static void signal_handler(int sig, siginfo_t *si, void *unused) {
 }
 
 static void signal_int_handler(int sig, siginfo_t *si, void *unused) {
-        printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n", 
-				file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
+	printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n",
+			file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
 	printf("Bye Bye !!\n");
 	exit(0);
 }
@@ -307,24 +310,20 @@ void setup_file_for_read(char* filename){
 void* producer(void* arg){
 	arg_t* args = (arg_t *) arg;
 	packet_t *packet = malloc(sizeof(packet_t)+MSS);
+	int i;
 	int len = 0;
 	int numbytes = 0;
 	long bytestoread = args->numBytes;
-	int i;
-
 	setup_file_for_read(args->filename);
 
 	if (bytestoread < file_size) {
 	    // Clip the file size to what ever need to be rad
 	    file_size = bytestoread;
 	}
-
-
 	sentbytes = 0;
 	assert(packet != NULL);
 
-	while(1) 
-	{
+	while(1) {
 		while(1) {
 		        int  rv;
 			rv = get_totalBytes();
@@ -429,52 +428,48 @@ void*recvAck(void* arg) {
 	FD_ZERO(&rd_fd);
 	while(!producer_exiting) {
 	    tv.tv_sec = 0;
-    	    tv.tv_usec = 5000;
-
+		tv.tv_usec = 5000;
 	    FD_SET(recv_sockfd, &rd_fd);
 	    retval = select(recv_sockfd+1, &rd_fd, NULL, NULL, &tv);
 
-	    if(producer_exiting)
-	       continue;
+		if(producer_exiting) continue;
+
 	   
  	    if(FD_ISSET(recv_sockfd, &rd_fd)) {
-		FD_CLR(recv_sockfd, &rd_fd);
-	        if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) != 
-				sizeof(ack_t))
-	        {
-		        if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) { 
+			FD_CLR(recv_sockfd, &rd_fd);
+			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
+				sizeof(ack_t)){
+				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
 				perror("Recieve error");
 				exit(1);
+				}
 			}
-	        }
-	     } else {
-		timerEvent = TIMEOUT;
-	     }
+		} else {
+			timerEvent = TIMEOUT;
+		}
 
-	     if(producer_exiting)
-	         continue;
-	     
-	     newEvent = getEvent(&recv_ack);
-	     s.curr_state = state;
-                 
-	     s = st_table[newEvent][state];
- 	
-	     // Take actions
-             if(s.act[0] != 0) {
-                 (s.act[0])();
-             }
-             if(s.act[1] != 0) {
-                 (s.act[1])();
-             }
-             if(s.act[2] != 0) {
-                  (s.act[2])();
-             }
- 	     if(s.act[3] != 0) {
-                  (s.act[3])();
-             }
+		 if(producer_exiting) continue;
 
-             // Set new state
-	     state = s.next_state;
+		 newEvent = getEvent(&recv_ack);
+		 s.curr_state = state;
+		 s = st_table[newEvent][state];
+
+		 // Take actions
+		 if(s.act[0] != 0) {
+			 (s.act[0])();
+		 }
+		 if(s.act[1] != 0) {
+			 (s.act[1])();
+		 }
+		 if(s.act[2] != 0) {
+			  (s.act[2])();
+		 }
+		 if(s.act[3] != 0) {
+		 	 (s.act[3])();
+		 }
+
+		 // Set new state
+		 state = s.next_state;
         }
         printf("Receive ack exiting\n");
 	
@@ -560,8 +555,7 @@ int setup_network(char *hostUDPport, char *hostname){
 
 void reliablyTransfer (char* hostname, char* hostUDPport, char* filename, long numBytes){
 	arg_t* args = malloc(sizeof(arg_t));
-	
-	
+
 	assert(args != NULL);
 	args->filename = filename;
 	args->numBytes = numBytes;
@@ -588,25 +582,26 @@ void init(char* hostUDPport, char* hostname){
 }
 
 int main(int argc, char** argv){
+	start = time(0);
 	long numBytes;
-        struct sigaction sa;
-	
-	if(argc != 5)
-	{
+	struct sigaction sa;
+	if(argc != 5){
 		fprintf(stderr, "usage: %s receiver_hostname receiver_port filename_to_xfer bytes_to_xfer\n\n", argv[0]);
 		exit(1);
 	}
-        sa.sa_flags = SA_RESTART;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_sigaction = signal_int_handler; 
-        if (sigaction(SIGINT, &sa, NULL) == -1) {
-            perror("sigaction");
-	    	exit(EXIT_FAILURE);
-        }
-
+	sa.sa_flags = SA_RESTART;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_sigaction = signal_int_handler;
+	if (sigaction(SIGINT, &sa, NULL) == -1) {
+		perror("sigaction");
+		exit(EXIT_FAILURE);
+	}
 	numBytes = atol(argv[4]);
 	init(argv[2], argv[1]);
 	reliablyTransfer(argv[1], argv[2], argv[3], numBytes);
+
+	diff = time(0) - start;
+	printf("Time taken %d\n", (int)diff);
 
 	return 0;
 }
