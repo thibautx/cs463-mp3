@@ -143,7 +143,6 @@ static inline void setcWndToMssTimesMssOvercWnd(void){
 	reset_totalBytes();
 }
 
-
 static inline void setcWndTossThreshPlus3MSS(void){
         cWnd = ssThresh + (3 * MSS);
     	reset_totalBytes();
@@ -218,8 +217,9 @@ static void signal_handler(int sig, siginfo_t *si, void *unused) {
 }
 
 static void signal_int_handler(int sig, siginfo_t *si, void *unused) {
-	printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n",
-			file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
+	int bytes_diff = (file_size - bytesReceivedByClient);
+	printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld, Diff=%d\n",
+			file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes, bytes_diff);
 	printf("Bye Bye !!\n");
 	exit(0);
 }
@@ -229,8 +229,10 @@ enum event getEvent(ack_t* ack){
 	uint32_t seq_num;
 //	int   buf_len;
 	uint32_t buf_len;
-	long  tot_bytes;
-	off_t offst;
+//	long  tot_bytes;
+	uint32_t tot_bytes;
+//	off_t offst;
+	uint32_t offst;
 
         if (ack == NULL)
 		return INVALID_EVT;
@@ -389,8 +391,9 @@ void* producer(void* arg){
 			    exit(1);
 		     }
 		 	free(p1);
-		 	printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n",
-			file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
+				int bytes_diff = (file_size - bytesReceivedByClient);
+				printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld, Diff=%d\n",
+					   file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes, bytes_diff);
 		 	break;
 		}
 	}
@@ -428,7 +431,7 @@ void*recvAck(void* arg) {
 	FD_ZERO(&rd_fd);
 	while(!producer_exiting) {
 	    tv.tv_sec = 0;
-		tv.tv_usec = 5000;
+		tv.tv_usec = 30000;
 	    FD_SET(recv_sockfd, &rd_fd);
 	    retval = select(recv_sockfd+1, &rd_fd, NULL, NULL, &tv);
 		if(producer_exiting) continue;
@@ -437,7 +440,7 @@ void*recvAck(void* arg) {
 			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
 				sizeof(ack_t)){
 				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
-				perror("Recieve error");
+				perror("sender: receive error");
 				exit(1);
 				}
 			}
@@ -610,25 +613,25 @@ void reliablyTransfer (char* hostname, char* hostUDPport, char* filename, long n
 }
 
 int tcp_handshake() {
-	char buf[3]; //store
-	int numbytes;
-
-	if ((numbytes = sendto(recv_sockfd, "SYN", 3, 0, p->ai_addr, p->ai_addrlen)) == -1) {
-		perror("sender: sendto");
-		exit(1);
-	}
-
-	if ((numbytes = recvfrom(recv_sockfd, buf, 3, 0,p->ai_addr, &p->ai_addrlen)) == -1) {
-		perror("recvfrom");
-		exit(1);
-	}
-
-	if (memcmp(buf,"ACK",3) != 0) {
-		printf("sender: tcp_handshake failed\n");
-		return -1;
-	}
-
-	printf("sender: tcp_handshake complete\n");
+//	char buf[3]; //store
+//	int numbytes;
+//
+//	if ((numbytes = sendto(recv_sockfd, "SYN", 3, 0, p->ai_addr, p->ai_addrlen)) == -1) {
+//		perror("sender: sendto");
+//		exit(1);
+//	}
+//
+//	if ((numbytes = recvfrom(recv_sockfd, buf, 3, 0,p->ai_addr, &p->ai_addrlen)) == -1) {
+//		perror("recvfrom");
+//		exit(1);
+//	}
+//
+//	if (memcmp(buf,"ACK",3) != 0) {
+//		printf("sender: tcp_handshake failed\n");
+//		return -1;
+//	}
+//
+//	printf("sender: tcp_handshake complete\n");
 	return 0; // return estimated timeout
 }
 
@@ -644,7 +647,7 @@ int main(int argc, char** argv){
 	sigemptyset(&sa.sa_mask);
 	sa.sa_sigaction = signal_int_handler;
 	if (sigaction(SIGINT, &sa, NULL) == -1) {
-		perror("sigaction");
+		perror("sender: sigaction");
 		exit(EXIT_FAILURE);
 	}
 	numBytes = atol(argv[4]);

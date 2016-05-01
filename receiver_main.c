@@ -15,9 +15,12 @@
 
 #define NO_MSG_WAIT_ALL 0
 
-int  sequencenumber;
-int  buf_len;
-off_t offst = 0;
+//int  sequencenumber;
+uint32_t sequencenumber;
+//int  buf_len;
+uint32_t buf_len;
+//off_t offst = 0;
+uint32_t offst = 0;
 
 unsigned int lossCtr = 0;
 
@@ -30,9 +33,10 @@ int rv;
 int recv_sockfd;
 struct addrinfo hints, *servinfo, *p;
 struct sockaddr their_addr;
-struct sockaddr_in si_me, si_other;
+//struct sockaddr_in si_me;
+struct sockaddr_in si_other;
 struct sockaddr_in peer_addr;
-socklen_t peer_addr_len = sizeof(struct sockaddr_in);
+//socklen_t peer_addr_len = sizeof(struct sockaddr_in);
 socklen_t their_addr_len = sizeof(their_addr);
 unsigned short int port_num;
 packet_t *recv_packet;
@@ -46,10 +50,9 @@ enum state getState(int sequencenum, off_t off){
 }
 
 int setup_network(char* UDPport){
-	int numbytes;
+//	int numbytes;
 //	char buf[MAXBUFLEN];
-	socklen_t their_addr_len = sizeof(their_addr);
-	char s[INET_ADDRSTRLEN];
+//	socklen_t their_addr_len = sizeof(their_addr);
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET; // set to AF_INET to force IPv4
 	hints.ai_socktype = SOCK_DGRAM;
@@ -103,11 +106,14 @@ int setup_network(char* UDPport){
 void* producer(void* arg){
 	char* destfile = (char *)arg;
 	ack_t  ack_now;
-	int numBytes;
+//	int numBytes;
+	ssize_t numBytes;
 	FILE*  dest;
-	int recvbytes;
-	long writebytes = 0;
-	long totalRecv = 0;
+	ssize_t recvbytes;
+//	long writebytes = 0;
+//	long totalRecv = 0;
+	uint64_t writebytes = 0;
+	uint64_t totalRecv;
 	int state = 0;
 	int prev_state = 0;
 	recv_packet = malloc(sizeof(packet_t)+MSS);
@@ -121,13 +127,14 @@ void* producer(void* arg){
 	offst = 0;
 	while(1){
 		if((recvbytes = recvfrom(recv_sockfd, recv_packet, sizeof(packet_t)+MSS, NO_MSG_WAIT_ALL,
-								 (struct sockaddr *)&their_addr, &their_addr_len)) == -1){
-			perror("Packet recieve error");
+								 &their_addr, &their_addr_len)) == -1){
+			perror("received: Packet receive error");
 			exit(1);
 		}
 		if(recvbytes != 1458){
-			printf("receiver: received %d bytes\n", recvbytes);
+			printf("receiver: received %lu bytes, type=%d\n", recvbytes, ntohl(recv_packet->packet_type));
 		}
+		printf("received: total received %lu\n", totalRecv);
 		totalRecv += recvbytes;
 		if (ntohl(recv_packet->packet_type) == EOF_PKT) {
 			eof_packet_t *ep = malloc(sizeof(eof_packet_t));;
@@ -239,26 +246,27 @@ void reliablyReceive(char* udpPort, char* destinationFile){
 }
 
 int tcp_handshake(){
-	int numbytes;
-	char buf[4];
-	buf[3] = '\0';
-
-	if ((numbytes = recvfrom(recv_sockfd, buf, 3, 0, &their_addr, &their_addr_len)) == -1) {
-		perror("recvfrom");
-		exit(1);
-	}
-
-	if (memcmp(buf,"SYN", 3) != 0) {
-		printf("Received: %s\n", buf);
-		return -1; // indicates termination
-	}
-
-	if ((numbytes = sendto(recv_sockfd, "ACK", 3, 0, &their_addr, their_addr_len)) == -1) {
-		perror("sender: sendto");
-		exit(1);
-	}
-	printf("receiver: tcp_handshake complete\n");
 	return 0;
+//	int numbytes;
+//	char buf[4];
+//	buf[3] = '\0';
+//
+//	if ((numbytes = recvfrom(recv_sockfd, buf, 3, 0, &their_addr, &their_addr_len)) == -1) {
+//		perror("recvfrom");
+//		exit(1);
+//	}
+//
+//	if (memcmp(buf,"SYN", 3) != 0) {
+//		printf("Received: %s\n", buf);
+//		return -1; // indicates termination
+//	}
+//
+//	if ((numbytes = sendto(recv_sockfd, "ACK", 3, 0, &their_addr, their_addr_len)) == -1) {
+//		perror("sender: sendto");
+//		exit(1);
+//	}
+//	printf("receiver: tcp_handshake complete\n");
+//	return 0;
 }
 
 int main(int argc, char** argv){
