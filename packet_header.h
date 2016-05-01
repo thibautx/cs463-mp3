@@ -11,7 +11,7 @@ typedef struct packet_t_struct{
         int            packet_type;
         int            buf_bytes;
         int            sequencenumber;
-	off_t          f_offset;
+		off_t          f_offset;
         unsigned char  data[0];
 } packet_t;
 
@@ -27,5 +27,5 @@ typedef struct ack_struct{
         int            sequencenumber;
         int            buf_len;
         long           tot_bytes;
-	off_t          f_offset;
+		off_t          f_offset;
 } ack_t;

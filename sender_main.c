@@ -22,6 +22,7 @@
 #define  EVENTS       5
 #define	 INVALID_EVT  5
 
+int timeout_counter;
 time_t start, diff;
 
 int sequencenumber;
@@ -53,6 +54,7 @@ enum event newEvent;
 int maxcWnd = 0;
 int mincWnd = MSS;
 
+struct addrinfo hints, *servinfo, *p;
 struct sockaddr_in si_other;
 socklen_t  si_other_addrlen;
 struct sockaddr_in si_local;
@@ -62,7 +64,7 @@ long readbytes = 0;
 long sentbytes = 0;
 long lostBytes = 0;
 
-long bytesReceivedByClient; 
+long bytesReceivedByClient;
 
 typedef struct arg_struct{
 	char * filename;
@@ -70,8 +72,8 @@ typedef struct arg_struct{
 } arg_t;
 
 //pthread_t doTimerid;
-pthread_t produceid; 
-pthread_t recvAckid; 
+pthread_t produceid;
+pthread_t recvAckid;
 pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
 
 ack_t  prev_ack;
@@ -82,15 +84,15 @@ long   file_size;
 off_t  offset;
 off_t  file_off_to_read;
 off_t  offset_just_seen;
- 
+
 static inline  void clearDupAck(void){
         dupAckCount = 0;
 }
- 
+
 static inline  void incrDupAckCount(void){
         dupAckCount++;
 }
- 
+
 static inline  void reset_totalBytes(void){
 	pthread_mutex_lock(&m);
 	totalBytes = 0;
@@ -100,7 +102,7 @@ static inline  void reset_totalBytes(void){
         if (cWnd < mincWnd) {
 	        mincWnd = cWnd;
 	}
-	
+
 	pthread_mutex_unlock(&m);
 }
 
@@ -109,28 +111,28 @@ static inline void incrcWndByMSS(void){
     if (cWnd >= ssThresh) {
 	cWnd = ssThresh - 1024;
     }
-    reset_totalBytes(); 
+    reset_totalBytes();
 }
 
 static inline void resetcWnd(void){
       cWnd = 1 * MSS;
-      reset_totalBytes(); 
+      reset_totalBytes();
 }
- 
+
 static inline void setcWndToSSThresh(void){
         cWnd = ssThresh;
-    	reset_totalBytes(); 
+    	reset_totalBytes();
 
 }
- 
+
 static inline void setSsThresh(void) {
         ssThresh = cWnd / 2;
 }
- 
+
 static inline void resetSsThresh(void){
         ssThresh = 64 * 1024;
 }
- 
+
 static inline void setcWndToMssTimesMssOvercWnd(void){
 
 	 cWnd = cWnd + (MSS * MSS)/cWnd;
@@ -138,16 +140,16 @@ static inline void setcWndToMssTimesMssOvercWnd(void){
 	{
 		cWnd = ssThresh - 1024;
 	}
-    	
-	reset_totalBytes(); 
+
+	reset_totalBytes();
 }
- 
- 
+
+
 static inline void setcWndTossThreshPlus3MSS(void){
         cWnd = ssThresh + (3 * MSS);
-    	reset_totalBytes(); 
+    	reset_totalBytes();
 }
- 
+
 static inline void start_machine(void){
         resetcWnd();
         resetSsThresh();
@@ -168,7 +170,7 @@ static inline void resetTransmitPtrs(void){
 	sentbytes = bytesReceivedByClient;
 	pthread_mutex_unlock(&m);
 }
- 
+
 static inline void InvalidEvt(void){
         unExpectedevt = 1;
 }
@@ -229,13 +231,13 @@ enum event getEvent(ack_t* ack){
 	long  tot_bytes;
 	off_t offst;
 
-        if (ack == NULL) 
+        if (ack == NULL)
 		return INVALID_EVT;
 
 	if( timerEvent == TIMEOUT) {
 	      timerEvent = INVALID_EVT;
 	      return TIMEOUT;
-	} 
+	}
 	else if(cWnd >= ssThresh)
 	{
 		return CNWD_GR_SSTHR;
@@ -249,34 +251,34 @@ enum event getEvent(ack_t* ack){
 
 		return DUPACKCNT_3;
 	}
-	else 
+	else
 	{
 		seq_num   = ntohl(ack->sequencenumber);
 		buf_len   = ntohl(ack->buf_len);
 		offst     = ntohl(ack->f_offset);
 		tot_bytes = ntohl(ack->tot_bytes);
 
-		if((prev_ack.sequencenumber == seq_num) && 
-		   (prev_ack.tot_bytes == tot_bytes) && 
-		   (prev_ack.f_offset == offst) && 
+		if((prev_ack.sequencenumber == seq_num) &&
+		   (prev_ack.tot_bytes == tot_bytes) &&
+		   (prev_ack.f_offset == offst) &&
 		   (prev_ack.buf_len == buf_len))
 		{
-			return DUPACK;			
+			return DUPACK;
 		}
-		
-	        prev_ack.sequencenumber = seq_num;
+
+		prev_ack.sequencenumber = seq_num;
 		prev_ack.buf_len = buf_len;
 		prev_ack.tot_bytes = tot_bytes;
 		prev_ack.f_offset = offst;
 
 		offset_just_seen = offst;
-		bytesReceivedByClient = tot_bytes; 
+		bytesReceivedByClient = tot_bytes;
 		reset_totalBytes();
 		return NEW_ACK;
 	}
 
 	return INVALID_EVT;
-	
+
 }
 
 void setup_file_for_read(char* filename){
@@ -325,32 +327,31 @@ void* producer(void* arg){
 
 	while(1) {
 		while(1) {
-		        int  rv;
-			rv = get_totalBytes();
-			if (rv >= cWnd) {	
+			int rv = get_totalBytes();
+			if (rv >= cWnd) {
 				pthread_yield();
-		        } else {
+			} else {
 			    break;
 			}
 		}
 
-	        pthread_mutex_lock(&m);
-	        offset = file_off_to_read;
+		pthread_mutex_lock(&m);
+		offset = file_off_to_read;
 		pthread_mutex_unlock(&m);
 
-                if ((offset+MSS) < file_size) {
-            		len = MSS;
-        	} else {
-            	    if (offset < file_size) {
-                        len = (file_size - offset);
-                    } else {
-                        len = 0;
-                    }
-               }
+		if ((offset+MSS) < file_size) {
+			len = MSS;
+		} else {
+			if (offset < file_size) {
+				len = (file_size - offset);
+			} else {
+				len = 0;
+			}
+	   }
 
 	       if (len > 0) {
 			   memset(packet->data, 0, MSS);
-			   packet->packet_type = NORMAL_PKT;
+			   packet->packet_type = htonl(NORMAL_PKT);
 			   readbytes += len;
 			   packet->buf_bytes = htonl(len);
 			   packet->sequencenumber = htonl(getAndIncrseqNumber());
@@ -378,7 +379,7 @@ void* producer(void* arg){
 		     eof_packet_t *p1;
 		     free(packet);
 		     p1 = malloc(sizeof(eof_packet_t));
-		     p1->packet_type = EOF_PKT;
+		     p1->packet_type = htonl(EOF_PKT);
 		     p1->eof = htonl(1);
 		     p1->file_sz = htonl(file_size);
 		     if ((numbytes = sendto(recv_sockfd, p1, sizeof(packet_t), MSG_WAITALL,
@@ -386,10 +387,10 @@ void* producer(void* arg){
 			    perror("producer 2: sendto");
 			    exit(1);
 		     }
-		     free(p1);
-                     printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n", 
-				file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
-		     break;
+		 	free(p1);
+		 	printf("Totalsize %ld bytes Read %ld Total xfered %ld Tot Received %ld Bytes Re-transmitted %ld\n",
+			file_size, readbytes, sentbytes, bytesReceivedByClient, lostBytes);
+		 	break;
 		}
 	}
 
@@ -401,19 +402,17 @@ void* producer(void* arg){
 	printf("Congestion window Max %d Min: %d Last Value: %d\n", maxcWnd, mincWnd, cWnd);
 
 	munmap(file_base_addr, file_size);
-
 	return NULL;
 }
 
 void*recvAck(void* arg) {
 	ack_t recv_ack;
 	state_machine_t  s;
-       	long numBytes;
-        struct sigaction sa;
-        struct timeval tv;
+	long numBytes;
+	struct sigaction sa;
+	struct timeval tv;
 	fd_set rd_fd;
 	int retval;
- 		
 
 	sa.sa_flags = SA_RESTART;
 	sigemptyset(&sa.sa_mask);
@@ -424,36 +423,64 @@ void*recvAck(void* arg) {
 	}
 	printf("recvAck started \n");
 
-		
+
 	FD_ZERO(&rd_fd);
 	while(!producer_exiting) {
 	    tv.tv_sec = 0;
 		tv.tv_usec = 5000;
 	    FD_SET(recv_sockfd, &rd_fd);
 	    retval = select(recv_sockfd+1, &rd_fd, NULL, NULL, &tv);
-
 		if(producer_exiting) continue;
+// 	    if(FD_ISSET(recv_sockfd, &rd_fd)) {
+//			FD_CLR(recv_sockfd, &rd_fd);
+//			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
+//				sizeof(ack_t)){
+//				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
+//				perror("Recieve error");
+//				exit(1);
+//				}
+//			}
+//		} else {
+//			timerEvent = TIMEOUT;
+//		}
+//		typedef struct ack_struct{
+//			int            sequencenumber;
+//			int            buf_len;
+//			long           tot_bytes;
+//			off_t          f_offset;
+//		} ack_t;
 
-	   
- 	    if(FD_ISSET(recv_sockfd, &rd_fd)) {
-			FD_CLR(recv_sockfd, &rd_fd);
-			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
-				sizeof(ack_t)){
-				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
-				perror("Recieve error");
-				exit(1);
-				}
+		if ((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), 0, p->ai_addr, &p->ai_addrlen)) == -1) {
+			printf("sender: received ack, sequencenumber=%d, tot_bytes=%lu\n",
+				   recv_ack.sequencenumber,
+				   recv_ack.tot_bytes);
+			if(errno == EAGAIN || errno == EWOULDBLOCK) {
+				timeout_counter++;
+				printf("timeout %d\n", timeout_counter);
+				timerEvent = TIMEOUT;
 			}
-		} else {
-			timerEvent = TIMEOUT;
+			else {
+				exit(1);
+			}
+		} else{
+			if(numBytes != 24){
+				printf("sender: received %lu bytes\n", numBytes);
+			}
 		}
 
 		 if(producer_exiting) continue;
 
-		 newEvent = getEvent(&recv_ack);
-		 s.curr_state = state;
-		 s = st_table[newEvent][state];
-
+	 	newEvent = getEvent(&recv_ack);
+	 	s.curr_state = state;
+//		enum event {
+//			NEW_ACK       = 0,
+//			TIMEOUT       = 1,
+//			DUPACK        = 2,
+//			DUPACKCNT_3   = 3,
+//			CNWD_GR_SSTHR = 4
+//		};
+//		printf("sender: curr_state=%d, event=%d\n", s.curr_state, newEvent);
+	 	s = st_table[newEvent][state];
 		 // Take actions
 		 if(s.act[0] != 0) {
 			 (s.act[0])();
@@ -465,24 +492,24 @@ void*recvAck(void* arg) {
 			  (s.act[2])();
 		 }
 		 if(s.act[3] != 0) {
-		 	 (s.act[3])();
+			 (s.act[3])();
 		 }
 
 		 // Set new state
-		 state = s.next_state;
-        }
-        printf("Receive ack exiting\n");
-	
+		state = s.next_state;
+//		printf("sender: new_state=%d\n\n", state);
+	}
+		printf("Receive ack exiting\n");
+
 	return NULL;
 }
 
-int setup_network(char *hostUDPport, char *hostname){
+int setup_network(char *udp_port, char *hostname){
 
 	int rv, numbytes;
-	struct addrinfo hints, *servinfo, *p;
 
 	//setting up sendto address
-	uint16_t sendto_port = (uint16_t)atoi(hostUDPport);
+	uint16_t sendto_port = (uint16_t)atoi(udp_port);
 	memset(&si_other, 0, sizeof(si_other));
 	si_other.sin_family = AF_INET;
 	si_other.sin_port = htons(sendto_port);
@@ -493,7 +520,7 @@ int setup_network(char *hostUDPport, char *hostname){
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_DGRAM;
 
-	if ((rv = getaddrinfo(hostname, hostUDPport, &hints, &servinfo)) != 0) {
+	if ((rv = getaddrinfo(hostname, udp_port, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
@@ -530,7 +557,7 @@ int setup_network(char *hostUDPport, char *hostname){
 	}
 
 
-	printf("sender: setup_netowrk complete\n");
+	printf("sender: setup_network complete\n");
 	return 0;
 	// memset((char *) &si_local, 0, sizeof(si_local));
 	// memset((char *) &si_local, 0, sizeof(si_local));
@@ -553,13 +580,20 @@ int setup_network(char *hostUDPport, char *hostname){
 	//       return 0;
 }
 
-void reliablyTransfer (char* hostname, char* hostUDPport, char* filename, long numBytes){
-	arg_t* args = malloc(sizeof(arg_t));
+void init(char* hostUDPport, char* hostname){
+	setup_network(hostUDPport, hostname);
+	tcp_handshake();
+	start_machine(); // set Start state
+	sequencenumber = 1;
+}
 
+void reliablyTransfer (char* hostname, char* hostUDPport, char* filename, long numBytes){
+	init(hostUDPport, hostname);
+	arg_t* args = malloc(sizeof(arg_t));
 	assert(args != NULL);
 	args->filename = filename;
 	args->numBytes = numBytes;
-			
+
 	//pthread_create(&doTimerid, NULL, doTimer, NULL);
 	pthread_create(&produceid, NULL, producer, (void*)args);
 	pthread_create(&recvAckid, NULL, recvAck, NULL);
@@ -574,11 +608,27 @@ void reliablyTransfer (char* hostname, char* hostUDPport, char* filename, long n
 	}
 }
 
-void init(char* hostUDPport, char* hostname){
+int tcp_handshake() {
+	char buf[3]; //store
+	int numbytes;
 
-	setup_network(hostUDPport, hostname);
- 	start_machine(); // set Start state
-	sequencenumber = 1;
+	if ((numbytes = sendto(recv_sockfd, "SYN", 3, 0, p->ai_addr, p->ai_addrlen)) == -1) {
+		perror("sender: sendto");
+		exit(1);
+	}
+
+	if ((numbytes = recvfrom(recv_sockfd, buf, 3, 0,p->ai_addr, &p->ai_addrlen)) == -1) {
+		perror("recvfrom");
+		exit(1);
+	}
+
+	if (memcmp(buf,"ACK",3) != 0) {
+		printf("sender: tcp_handshake failed\n");
+		return -1;
+	}
+
+	printf("sender: tcp_handshake complete\n");
+	return 0; // return estimated timeout
 }
 
 int main(int argc, char** argv){
@@ -597,7 +647,6 @@ int main(int argc, char** argv){
 		exit(EXIT_FAILURE);
 	}
 	numBytes = atol(argv[4]);
-	init(argv[2], argv[1]);
 	reliablyTransfer(argv[1], argv[2], argv[3], numBytes);
 
 	diff = time(0) - start;
