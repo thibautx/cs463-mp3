@@ -12,7 +12,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include <time.h>
 #include "packet_header.h"
 
 #define  NUM_STATES   3
@@ -226,8 +225,10 @@ static void signal_int_handler(int sig, siginfo_t *si, void *unused) {
 }
 
 enum event getEvent(ack_t* ack){
-	int   seq_num;
-	int   buf_len;
+//	int   seq_num;
+	uint32_t seq_num;
+//	int   buf_len;
+	uint32_t buf_len;
 	long  tot_bytes;
 	off_t offst;
 
@@ -408,7 +409,7 @@ void* producer(void* arg){
 void*recvAck(void* arg) {
 	ack_t recv_ack;
 	state_machine_t  s;
-	long numBytes;
+	ssize_t numBytes;
 	struct sigaction sa;
 	struct timeval tv;
 	fd_set rd_fd;
@@ -431,18 +432,18 @@ void*recvAck(void* arg) {
 	    FD_SET(recv_sockfd, &rd_fd);
 	    retval = select(recv_sockfd+1, &rd_fd, NULL, NULL, &tv);
 		if(producer_exiting) continue;
-// 	    if(FD_ISSET(recv_sockfd, &rd_fd)) {
-//			FD_CLR(recv_sockfd, &rd_fd);
-//			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
-//				sizeof(ack_t)){
-//				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
-//				perror("Recieve error");
-//				exit(1);
-//				}
-//			}
-//		} else {
-//			timerEvent = TIMEOUT;
-//		}
+ 	    if(FD_ISSET(recv_sockfd, &rd_fd)) {
+			FD_CLR(recv_sockfd, &rd_fd);
+			if((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), MSG_WAITALL, NULL, 0)) !=
+				sizeof(ack_t)){
+				if ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR)) {
+				perror("Recieve error");
+				exit(1);
+				}
+			}
+		} else {
+			timerEvent = TIMEOUT;
+		}
 //		typedef struct ack_struct{
 //			int            sequencenumber;
 //			int            buf_len;
@@ -450,23 +451,23 @@ void*recvAck(void* arg) {
 //			off_t          f_offset;
 //		} ack_t;
 
-		if ((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), 0, p->ai_addr, &p->ai_addrlen)) == -1) {
-			printf("sender: received ack, sequencenumber=%d, tot_bytes=%lu\n",
-				   recv_ack.sequencenumber,
-				   recv_ack.tot_bytes);
-			if(errno == EAGAIN || errno == EWOULDBLOCK) {
-				timeout_counter++;
-				printf("timeout %d\n", timeout_counter);
-				timerEvent = TIMEOUT;
-			}
-			else {
-				exit(1);
-			}
-		} else{
-			if(numBytes != 24){
-				printf("sender: received %lu bytes\n", numBytes);
-			}
-		}
+//		if ((numBytes = recvfrom(recv_sockfd, &recv_ack, sizeof(ack_t), 0, p->ai_addr, &p->ai_addrlen)) == -1) {
+//			printf("sender: received ack, sequencenumber=%d, tot_bytes=%lu\n",
+//				   recv_ack.sequencenumber,
+//				   recv_ack.tot_bytes);
+//			if(errno == EAGAIN || errno == EWOULDBLOCK) {
+//				timeout_counter++;
+//				printf("timeout %d\n", timeout_counter);
+//				timerEvent = TIMEOUT;
+//			}
+//			else {
+//				exit(1);
+//			}
+//		} else{
+//			if(numBytes != 24){
+//				printf("sender: received %lu bytes\n", numBytes);
+//			}
+//		}
 
 		 if(producer_exiting) continue;
 
